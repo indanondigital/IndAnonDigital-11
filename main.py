@@ -2,7 +2,6 @@ import os
 import asyncio
 import random
 import uvicorn
-import razorpay
 import hmac
 import hashlib
 import json
@@ -29,12 +28,8 @@ load_dotenv()
 
 # Load Secrets
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-RZP_KEY = os.getenv("RZP_KEY")
-RZP_SECRET = os.getenv("RZP_SECRET")
-RAZORPAY_WEBHOOK_SECRET = os.getenv("RAZORPAY_WEBHOOK_SECRET", "YOUR_WEBHOOK_SECRET")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
-razorpay_client = razorpay.Client(auth=(RZP_KEY, RZP_SECRET))
 
 # --- LOGGING CONFIGURATION ---
 try:
@@ -927,95 +922,117 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_payment_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
-    
-    # 1. CHECK PAYMENT STATUS
-    if query.data.startswith("check_"):
-        pay_id = query.data.replace("check_", "")
-        log(user_id, "CHECK_PAYMENT_STATUS", pay_id=pay_id)
+    data = query.data
+
+    # --- 1. ADMIN CLICKED "APPROVE" (With Stacking & Logging) ---
+    if data.startswith("approve_"):
+        # Format: approve_USERID_DAYS
+        parts = data.split("_")
+        target_id = int(parts[1])
+        days_to_add = int(parts[2])
         
+        # --- 🧠 STACKING LOGIC (Preserved from Old Code) ---
+        # 1. Get current user data to see if they are already VIP
+        user_data = await db.get_user(target_id)
+        current_expiry = user_data.get('vip_expiry')
+        
+        total_days = days_to_add
+        msg_extra = ""
+
+        # 2. Check if they already have active VIP
+        if current_expiry and isinstance(current_expiry, datetime.datetime) and current_expiry > datetime.datetime.now():
+            # Calculate remaining days
+            delta = current_expiry - datetime.datetime.now()
+            remaining_days = delta.days + 1 # +1 Buffer
+            
+            # Stack them: Existing + New
+            total_days = remaining_days + days_to_add
+            msg_extra = f"\n(Added to existing {remaining_days} days)"
+        # ----------------------------------------------------
+
+        # 3. Update DB with the TOTAL summed days
+        await db.make_premium(target_id, days=total_days)
+
+        # Update Admin's Message to show success
+        await query.edit_message_caption(caption=f"✅ **APPROVED!**\nUser {target_id} given {days_to_add} days.\n(Total VIP: {total_days} days)")
+
+        # --- 🔒 SHADOW LOG (Preserved) ---
+        # We assume amount is 0 or calculate approx for logs since it's manual
+        # Finding approx amount from days for logging purposes
+        estimated_amount = "Unknown"
+        for p in VIP_PLANS.values():
+            if p['days'] == days_to_add:
+                estimated_amount = p['amt'] // 100
+                break
+
+        await log_payment_event(
+            context=context,
+            user_id=target_id,
+            amount=estimated_amount,
+            status="MANUAL_APPROVED",
+            payload=f"Admin: {user_id}"
+        )
+        
+        # General Log
+        log(target_id, "PAYMENT_SUCCESS_MANUAL", added=days_to_add, total=total_days, admin=user_id)
+
+        # Notify User
         try:
-            # Fetch status from Razorpay
-            details = razorpay_client.payment_link.fetch(pay_id)
-            status = details.get('status')
-            
-            if status == 'paid':
-                # The new days purchased (e.g., 30, 90, etc.)
-                purchased_days = AMT_TO_DAYS.get(details['amount'], 30)
-                
-                # --- 🧠 STACKING LOGIC START ---
-                # 1. Get current user data
-                user_data = await db.get_user(user_id)
-                current_expiry = user_data.get('vip_expiry')
-                
-                total_days = purchased_days
-                msg_extra = ""
-
-                # 2. Check if they already have active VIP
-                if current_expiry and isinstance(current_expiry, datetime.datetime) and current_expiry > datetime.datetime.now():
-                    # Calculate remaining days
-                    delta = current_expiry - datetime.datetime.now()
-                    remaining_days = delta.days + 1 # +1 Buffer to prevent losing hours
-                    
-                    # Stack them: Existing + New
-                    total_days = remaining_days + purchased_days
-                    msg_extra = f"\n(Added to your existing {remaining_days} days)"
-                # --------------------------------
-
-                # 3. Update DB with the TOTAL summed days
-                await db.make_premium(user_id, days=total_days)
-                
-                # --- 🔒 SHADOW LOG ---
-                await log_payment_event(
-                    context=context,
-                    user_id=user_id,
-                    amount=details['amount'] / 100,
-                    status="SUCCESS",
-                    payload=details.get('id', 'N/A')
-                )
-
-                log(user_id, "PAYMENT_SUCCESS", amount=details['amount'], added=purchased_days, total=total_days)
-                
-                await query.edit_message_text(f"🎉 **Payment Received!**\nVIP is ACTIVE for {total_days} Days.{msg_extra}")
-            
-            else: 
-                await query.answer(
-                    f"❌ Payment not done or not received.\nStatus: {status}\n\nPlease complete payment.", 
-                    show_alert=True
-                )
-        
-        except Exception as e: 
-            print(f"Payment Error: {e}")
-            await query.answer("❌ Error verifying payment.", show_alert=True)
+            await context.bot.send_message(
+                target_id, 
+                f"🎉 **Payment Verified!**\n\nYou are now a VIP Member for **{total_days} Days**!{msg_extra}\nStart chatting with /chat.",
+                parse_mode=ParseMode.MARKDOWN
+            )
+        except:
+            pass # User blocked bot
         return
 
-    # 2. CREATE NEW PAYMENT LINK
-    plan = VIP_PLANS.get(query.data)
-    if not plan: return
-    
-    log(user_id, "INITIATE_PAYMENT", plan=query.data)
-    
-    try:
-        link = razorpay_client.payment_link.create({
-            "amount": plan['amt'], 
-            "currency": "INR", 
-            "description": "VIP Membership",
-            "customer": {
-                "name": "App Member"
-            },
-            "notify": {"sms": False, "email": False}
-        })
+    # --- 2. ADMIN CLICKED "REJECT" ---
+    if data.startswith("reject_"):
+        target_id = int(data.split("_")[1])
+        await query.edit_message_caption(caption=f"❌ **REJECTED.**\nUser {target_id} was denied.")
         
-        kb = [
-            [InlineKeyboardButton("💸 Pay Securely", url=link['short_url'])],
-            [InlineKeyboardButton("✅ I have Paid", callback_data=f"check_{link['id']}")]
-        ]
-        await query.edit_message_text(
-            f"💎 Selected: {plan['lbl']}\n👇 Click below to pay:", 
-            reply_markup=InlineKeyboardMarkup(kb)
+        # Log the rejection
+        log(target_id, "PAYMENT_REJECTED", admin=user_id)
+        
+        try:
+            await context.bot.send_message(target_id, "❌ **Payment Rejected.**\nYour screenshot was not accepted. Please contact the Admin.", parse_mode=ParseMode.MARKDOWN)
+        except:
+            pass
+        return
+
+    # --- 3. USER SELECTS PLAN (SEND QR CODE) ---
+    plan = VIP_PLANS.get(data)
+    if plan:
+        # Log that they clicked the button
+        log(user_id, "INITIATE_PAYMENT", plan=data)
+
+        amount_in_rupees = plan['amt'] // 100 
+        
+        caption = (
+            f"💎 **Upgrade to VIP: {plan['lbl']}**\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"💰 **Pay Amount: ₹{amount_in_rupees}**\n\n"
+            f"1️⃣ Scan the QR Code above.\n"
+            f"2️⃣ Pay exactly **₹{amount_in_rupees}**.\n"
+            f"3️⃣ **Send the payment screenshot here.**\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"⏳ *I will verify and activate your plan manually.*"
         )
-    except Exception as e:
-        print(f"Link Creation Error: {e}") 
-        await query.edit_message_text("❌ Error creating payment link.")    
+
+        try:
+            # Sends the qrcode.jpg from your folder
+            await query.message.reply_photo(
+                photo=open("qrcode.jpg", "rb"),
+                caption=caption,
+                parse_mode=ParseMode.MARKDOWN
+            )
+            # Save state so we know they are paying
+            user_states[user_id] = f"WAITING_PAYMENT_{plan['days']}"
+        except FileNotFoundError:
+            await query.message.reply_text("⚠️ Error: `qrcode.jpg` not found. Please contact Admin.")
+        
+        await query.answer()    
 
 # --- ADMIN COMMANDS ---
 async def admin_op(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1244,9 +1261,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-@app.post('/razorpay/webhook')
-async def razorpay_webhook(request: Request): 
-    return {"status": "success"}
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
