@@ -817,7 +817,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         log(user_id, "OPEN_PREMIUM_MENU")
         kb = [[InlineKeyboardButton(f"{v['lbl']} - ₹{v['amt']//100}", callback_data=k)] for k,v in VIP_PLANS.items()]
         await update.message.reply_text("💎 **Choose VIP Plan:**", reply_markup=InlineKeyboardMarkup(kb))
-        return
+        return  
     
     if text == "ℹ️ About": return await about_command(update, context)
     if text == "❓ Help": return await help_command(update, context)
