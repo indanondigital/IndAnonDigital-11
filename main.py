@@ -1032,7 +1032,7 @@ async def handle_payment_selection(update: Update, context: ContextTypes.DEFAULT
         except FileNotFoundError:
             await query.message.reply_text("⚠️ Error: `qrcode.jpg` not found. Please contact Admin.")
         
-        await query.answer()    
+        await query.answer()   
 
 # --- ADMIN COMMANDS ---
 async def admin_op(update: Update, context: ContextTypes.DEFAULT_TYPE):
