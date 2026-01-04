@@ -1294,8 +1294,8 @@ async def lifespan(app: FastAPI):
     # Registration handles: reg_... , reset_... , close_settings
     telegram_app.add_handler(CallbackQueryHandler(handle_registration_callbacks, pattern="^(reg_|reset_|close_)"))
     
-    # Payments handles: pay_... , check_...
-    telegram_app.add_handler(CallbackQueryHandler(handle_payment_selection, pattern="^(pay_|check_)"))
+    # ✅ FIXED HANDLER: Now listens for 'approve' and 'reject' clicks too
+telegram_app.add_handler(CallbackQueryHandler(handle_payment_selection, pattern="^(pay_|check_|approve_|reject_)"))
 
     # 👇 [NEW] ADD THIS LINE for the /preferences command
     telegram_app.add_handler(CommandHandler("preferences", handle_text))
