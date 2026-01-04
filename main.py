@@ -28,19 +28,20 @@ load_dotenv()
 
 # Load Secrets
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+# ✅ Correct
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
 
 # --- LOGGING CONFIGURATION ---
 try:
     # 1. REPORT CHANNEL (Bans, User Reports, Appeals)
-    LOG_REPORTS = int(os.getenv("LOG_CHANNEL_REPORTS", "0")) 
+    LOG_REPORTS = int(os.getenv("LOG_CHANNEL_REPORTS")) 
     
     # 2. MEDIA CHANNEL (Photos, Videos, Evidence)
-    LOG_MEDIA = int(os.getenv("LOG_CHANNEL_MEDIA", "0"))
+    LOG_MEDIA = int(os.getenv("LOG_CHANNEL_MEDIA"))
     
     # 3. PAYMENT CHANNEL (Money, VIP Subscriptions)
-    LOG_PAYMENTS = int(os.getenv("LOG_CHANNEL_PAYMENTS", "0"))
+    LOG_PAYMENTS = int(os.getenv("LOG_CHANNEL_PAYMENTS"))
 except (TypeError, ValueError):
     print("⚠️ [LOG] WARNING: One or more Log Channel IDs are missing/invalid.")
     LOG_REPORTS = LOG_MEDIA = LOG_PAYMENTS = 0
@@ -1274,7 +1275,7 @@ async def preferences_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     await update.message.reply_text(msg, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
 
-# --- 7. STARTUP (FIXED HANDLERS) ---
+# --- 7. STARTUP & LIFESPAN (Cleaned & Verified) ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # 1. Connect DB
@@ -1284,40 +1285,41 @@ async def lifespan(app: FastAPI):
     global telegram_app
     telegram_app = Application.builder().token(BOT_TOKEN).build()
     
-    # 3. Clear old webhooks
+    # 3. Clear old webhooks (Prevents conflicts)
     await telegram_app.bot.delete_webhook(drop_pending_updates=True)
     
-    # 4. Register Handlers
+    # 4. Register Handlers (ORDER MATTERS)
+    
+    # --- Commands ---
     telegram_app.add_handler(CommandHandler("start", start))
-    
-    # ✅ FIX: Added 'pattern' so these handlers don't conflict
-    # Registration handles: reg_... , reset_... , close_settings
-    telegram_app.add_handler(CallbackQueryHandler(handle_registration_callbacks, pattern="^(reg_|reset_|close_)"))
-    
-    # ✅ FIXED HANDLER: Now listens for 'approve' and 'reject' clicks too
-telegram_app.add_handler(CallbackQueryHandler(handle_payment_selection, pattern="^(pay_|check_|approve_|reject_)"))
-
-    # 👇 [NEW] ADD THIS LINE for the /preferences command
-    telegram_app.add_handler(CommandHandler("preferences", handle_text))
-
-# THIS LINE HERE For Ban Appeals 
-    telegram_app.add_handler(CallbackQueryHandler(handle_ban_appeal, pattern="^ban_appeal$")) 
-# THIS LINE HERE FOR REPORT/CHAT BUTTONS 
-    telegram_app.add_handler(CallbackQueryHandler(handle_report_buttons, pattern="^(find_new_partner|report_|set_pref_)"))
     telegram_app.add_handler(CommandHandler("help", help_command))
     telegram_app.add_handler(CommandHandler("about", about_command))
+    telegram_app.add_handler(CommandHandler("preferences", preferences_command))
     
-    # Admin Ops
+    # --- Admin Ops ---
     telegram_app.add_handler(CommandHandler(["ban", "unban", "addvip", "removevip"], admin_op))
 
-    # This forces these commands to go to 'handle_text' where we wrote the logic
-    telegram_app.add_handler(CommandHandler("report", handle_text))
-    telegram_app.add_handler(CommandHandler("cancel", handle_text))
+    # --- Callbacks (Buttons) ---
+    # Registration: Gender, Country, Resets
+    telegram_app.add_handler(CallbackQueryHandler(handle_registration_callbacks, pattern="^(reg_|reset_|close_)"))
     
-    # Core Text & Media
-    telegram_app.add_handler(CommandHandler(["chat", "exit", "premium", "settings"], handle_text))
+    # Payments: Pay, Approve, Reject
+    telegram_app.add_handler(CallbackQueryHandler(handle_payment_selection, pattern="^(pay_|approve_|reject_)"))
+    
+    # Ban Appeals
+    telegram_app.add_handler(CallbackQueryHandler(handle_ban_appeal, pattern="^ban_appeal$"))
+    
+    # Report & Matching Buttons
+    telegram_app.add_handler(CallbackQueryHandler(handle_report_buttons, pattern="^(find_new_partner|report_|set_pref_)"))
+
+    # --- Message Handlers (Text & Media) ---
+    # Redirect specific commands to handle_text to manage chat logic
+    telegram_app.add_handler(CommandHandler(["report", "cancel", "chat", "exit", "premium", "settings"], handle_text))
+    
+    # General Text (Chatting)
     telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    # ✅ FIX: Listen for ALL media types (Audio, Files, Round Video, etc.)
+    
+    # Media (Images, Video, Voice, Files) - Handles BOTH Payment Proofs & Chat Media
     telegram_app.add_handler(MessageHandler(
         filters.PHOTO | filters.VIDEO | filters.VOICE | filters.AUDIO | filters.VIDEO_NOTE | filters.Document.ALL | filters.Sticker.ALL, 
         handle_media
@@ -1328,17 +1330,17 @@ telegram_app.add_handler(CallbackQueryHandler(handle_payment_selection, pattern=
     await telegram_app.start()
     await telegram_app.updater.start_polling()
     
-    yield # Server runs here
+    yield # Server keeps running here
     
     # 6. Shutdown
     await telegram_app.updater.stop()
     await telegram_app.stop()
     await telegram_app.shutdown()
 
+# Create FastAPI App
 app = FastAPI(lifespan=lifespan)
 
-
-
+# Start Server
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run(app, host="0.0.0.0", port=port)
