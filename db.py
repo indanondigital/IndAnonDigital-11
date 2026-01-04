@@ -81,12 +81,8 @@ class Database:
         async with self.pool.acquire() as conn:
             return await conn.fetchrow("SELECT * FROM users WHERE user_id = $1", user_id)
 
-    # --- SETTERS (Standardized for PostgreSQL) ---
-    
-# [PASTE THIS INSIDE db.py (Inside the Database class)]
-
+    # --- SETTERS ---
     async def set_gender(self, user_id, gender):
-        # FIX: Use self.pool.acquire() instead of self.execute()
         async with self.pool.acquire() as conn:
             await conn.execute("UPDATE users SET gender = $1 WHERE user_id = $2", gender, user_id)
 
@@ -99,7 +95,6 @@ class Database:
             await conn.execute("UPDATE users SET age = $1 WHERE user_id = $2", age, user_id)
 
     # --- PAYMENT & VIP LOGIC ---
-    
     async def set_order_id(self, user_id, order_id):
         async with self.pool.acquire() as conn:
             await conn.execute("UPDATE users SET current_order_id = $1 WHERE user_id = $2", order_id, user_id)
@@ -129,7 +124,6 @@ class Database:
             print(f"✅ DB: User {user_id} VIP extended by {days} days.")
 
     # --- CHAT & BAN LOGIC ---
-
     async def ban_user(self, user_id):
         async with self.pool.acquire() as conn:
             await conn.execute("INSERT INTO banned_users (user_id) VALUES ($1) ON CONFLICT DO NOTHING", user_id)
@@ -197,5 +191,16 @@ class Database:
         async with self.pool.acquire() as conn:
             val = await conn.fetchval("SELECT 1 FROM search_queue WHERE user_id = $1", user_id)
             return val is not None
+
+    # --- 🆕 NEW VIP RE-CHAT FEATURE (SQL Version) ---
+    async def connect_users(self, user1_id, user2_id):
+        """Forces two specific users to match."""
+        async with self.pool.acquire() as conn:
+            # 1. Remove both from queue (if they are searching)
+            await conn.execute("DELETE FROM search_queue WHERE user_id = $1 OR user_id = $2", user1_id, user2_id)
+            
+            # 2. Insert into active chats
+            await conn.execute("INSERT INTO active_chats (user_1, user_2) VALUES ($1, $2)", user1_id, user2_id)
+            return True
 
 db = Database()

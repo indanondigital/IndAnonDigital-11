@@ -480,7 +480,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(help_text, reply_markup=kb)
 
 async def about_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("ℹ️ About\n\nAnonymous Chat Bot V2.\nSecure, Fast, Private.")
+    await update.message.reply_text("ℹ️ About\n\nChat anonymously for free* — private, instant, and secure.\n"
+    "_Go premium_ to unlock *advanced filters* and *personalized matching*.\n\n"
+    "🇮🇳 _Developed in India.")
 
 # --- BAN APPEAL HANDLER ---
 async def handle_ban_appeal(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -748,9 +750,61 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ])
         await update.message.reply_text(msg, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
         return
+    
+    # ---------------------------------------------------------
+    # 🔄 NEW: VIP RE-CHAT FEATURE
+    # ---------------------------------------------------------
+    if text in ["🔄 Re-Chat", "/rechat"]:
+        # 1. Check VIP
+        is_vip = await db.check_premium(user_id) or user_id == ADMIN_ID
+        if not is_vip:
+            await update.message.reply_text(
+                "💎 **VIP Only Feature**\n\n"
+                "Only Premium members can reconnect with previous partners.\n"
+                "Click **💎 Premium** to upgrade!",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
+
+        # 2. Check if user is already in a chat
+        if await db.get_partner(user_id):
+            await update.message.reply_text("⚠️ You are already in a chat! Exit first.")
+            return
+
+        # 3. Find Last Partner
+        last_info = last_partners.get(user_id)
+        if not last_info:
+            await update.message.reply_text("❌ **No previous partner found.**\nMatch with someone new first!")
+            return
+
+        target_id = last_info['id']
+
+        # 4. Check if Target is Available (Not in chat)
+        if await db.get_partner(target_id):
+            await update.message.reply_text("⚠️ **Partner Busy.**\nYour previous partner is currently in another chat.")
+            return
+
+        # 5. Send Invite to Target
+        try:
+            # Create "Accept" Button
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ Accept Re-Chat", callback_data=f"accept_rechat_{user_id}")]
+            ])
+            
+            await context.bot.send_message(
+                target_id,
+                f"🔄 **Reconnect Request**\n\nYour previous partner wants to chat again!\nDo you want to accept?",
+                reply_markup=kb,
+                parse_mode=ParseMode.MARKDOWN
+            )
+            await update.message.reply_text(f"📨 **Request Sent!**\nWaiting for them to accept...")
+            
+        except Exception:
+            await update.message.reply_text("❌ **Failed.**\nThe user has blocked the bot or is unavailable.")
+        return
 
     # --- CHAT LOGIC ---
-    if text in ["💬 Chat", "/chat", "🔄 Re-Chat", "/rechat"]:
+    if text in ["💬 Chat", "/chat"]:
         
         # 🛑 FIX: BLOCK IF ALREADY IN CHAT
         if await db.get_partner(user_id):
@@ -993,6 +1047,33 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             except Exception as e:
                 print(f"Log Error: {e}")
+
+# [PASTE ABOVE 'async def handle_payment_selection']
+
+async def handle_rechat_accept(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user_id = query.from_user.id # This is the person CLICKING Accept (Target)
+    data = query.data
+    
+    if data.startswith("accept_rechat_"):
+        original_requester = int(data.split("_")[-1]) # This is the VIP user
+        
+        # 1. Security Checks
+        if await db.get_partner(user_id):
+            await query.answer("You are already in a chat!", show_alert=True)
+            return
+            
+        if await db.get_partner(original_requester):
+            await query.edit_message_text("❌ **Too late.**\nThe other user entered another chat.")
+            return
+
+        # 2. CONNECT THEM (Using the new DB function)
+        await db.connect_users(user_id, original_requester)
+        
+        # 3. Send Match Messages
+        await query.answer("Connected!")
+        await query.message.delete() # Remove the button
+        await send_match_messages(context, user_id, original_requester)
 
 # --- 6. PAYMENTS (SAFE & LOGGED) ---
 # --- 6. PAYMENTS (STACKING LOGIC) ---
@@ -1308,6 +1389,9 @@ async def lifespan(app: FastAPI):
     
     # Ban Appeals
     telegram_app.add_handler(CallbackQueryHandler(handle_ban_appeal, pattern="^ban_appeal$"))
+
+    # Re-Chat Accept Button
+    telegram_app.add_handler(CallbackQueryHandler(handle_rechat_accept, pattern="^accept_rechat_"))
     
     # Report & Matching Buttons
     telegram_app.add_handler(CallbackQueryHandler(handle_report_buttons, pattern="^(find_new_partner|report_|set_pref_)"))
