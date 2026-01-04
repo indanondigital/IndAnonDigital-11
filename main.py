@@ -480,9 +480,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(help_text, reply_markup=kb)
 
 async def about_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("ℹ️ About\n\nChat anonymously for free* — private, instant, and secure.\n"
-    "_Go premium_ to unlock *advanced filters* and *personalized matching*.\n\n"
-    "🇮🇳 _Developed in India.")
+    await update.message.reply_text("ℹ️ About\n\nEnjoy free, anonymous one-to-one chats with real people. \nUpgrade anytime to unlock smart filters and preference-based matching. \n\n Made in India")
 
 # --- BAN APPEAL HANDLER ---
 async def handle_ban_appeal(update: Update, context: ContextTypes.DEFAULT_TYPE):
