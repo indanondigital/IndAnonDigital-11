@@ -1554,7 +1554,7 @@ async def preferences_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     await update.message.reply_text(msg, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
 
-# --- 7. STARTUP & LIFESPAN (STRICT ORDER & CLEANED) ---
+# --- 7. STARTUP & LIFESPAN (Cleaned & Verified) ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # 1. Connect DB
@@ -1564,59 +1564,70 @@ async def lifespan(app: FastAPI):
     global telegram_app
     telegram_app = Application.builder().token(BOT_TOKEN).build()
     
-    # 3. Clear old webhooks
+    # 3. Clear old webhooks (Prevents conflicts)
     await telegram_app.bot.delete_webhook(drop_pending_updates=True)
     
-    # --- HANDLERS (ORDER IS CRITICAL) ---
+    # 4. Register Handlers (ORDER MATTERS)
     
-    # A. SPECIFIC COMMANDS (Start, Admin, Support)
-    # These must be registered first so they go to their dedicated functions.
+    # --- Commands ---
     telegram_app.add_handler(CommandHandler("start", start))
     telegram_app.add_handler(CommandHandler("help", help_command))
     telegram_app.add_handler(CommandHandler("about", about_command))
     telegram_app.add_handler(CommandHandler("preferences", preferences_command))
     telegram_app.add_handler(CommandHandler("clear", clear_buttons))
     
-    # Admin & Support Tools
+    # --- Admin Ops ---
     telegram_app.add_handler(CommandHandler(["ban", "unban", "addvip", "removevip"], admin_op))
+
+    # Support & Admin Tools
     telegram_app.add_handler(CommandHandler("support", support_command))
     telegram_app.add_handler(CommandHandler("reply", reply_command))
     telegram_app.add_handler(CommandHandler("broadcast", broadcast_command))
+    
 
-    # B. DATING FLOW COMMANDS (⚠️ PRIVATE CHAT ONLY)
-    # These commands control the dating menus/logic inside handle_text.
-    # We REMOVED 'start', 'help', 'support' etc from here to avoid duplicates.
-    telegram_app.add_handler(CommandHandler(
-        ["chat", "exit", "premium", "settings", "rechat", "report", "cancel"], 
-        handle_text, 
-        filters=filters.ChatType.PRIVATE 
+    # 2. General Text for Dating (PRIVATE ONLY)
+    telegram_app.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, 
+        handle_text
     ))
 
-    # C. CALLBACK QUERIES (Buttons)
-    telegram_app.add_handler(CallbackQueryHandler(handle_registration_callbacks, pattern="^(reg_|reset_|close_)"))
-    telegram_app.add_handler(CallbackQueryHandler(handle_payment_selection, pattern="^(pay_|approve_|reject_)"))
-    telegram_app.add_handler(CallbackQueryHandler(handle_ban_appeal, pattern="^ban_appeal$"))
-    telegram_app.add_handler(CallbackQueryHandler(handle_rechat_accept, pattern="^accept_rechat_"))
-    telegram_app.add_handler(CallbackQueryHandler(handle_report_buttons, pattern="^(find_new_partner|report_|set_pref_)"))
-
-    # D. TEXT HANDLERS (SEPARATED)
-    
-    # 1. Group Moderation (⚠️ GROUPS ONLY)
-    # This runs the "Warden" code to check for bad words
+    # 3. Group Moderation (GROUPS ONLY)
+    # This runs the Security/Warden code we wrote earlier
     telegram_app.add_handler(MessageHandler(
         filters.TEXT & filters.ChatType.GROUPS, 
         group_moderation
     ))
 
-    # 2. Dating Logic (⚠️ PRIVATE CHAT ONLY)
-    # This handles chatting, gender selection numbers, etc.
-    telegram_app.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, 
-        handle_text
+    # --- Callbacks (Buttons) ---
+    # Registration: Gender, Country, Resets
+    telegram_app.add_handler(CallbackQueryHandler(handle_registration_callbacks, pattern="^(reg_|reset_|close_)"))
+    
+    # Payments: Pay, Approve, Reject
+    telegram_app.add_handler(CallbackQueryHandler(handle_payment_selection, pattern="^(pay_|approve_|reject_)"))
+    
+    # Ban Appeals
+    telegram_app.add_handler(CallbackQueryHandler(handle_ban_appeal, pattern="^ban_appeal$"))
+
+    # Re-Chat Accept Button
+    telegram_app.add_handler(CallbackQueryHandler(handle_rechat_accept, pattern="^accept_rechat_"))
+    
+    # Report & Matching Buttons
+    telegram_app.add_handler(CallbackQueryHandler(handle_report_buttons, pattern="^(find_new_partner|report_|set_pref_)"))
+
+    # --- Message Handlers (Text & Media) ---
+    # Redirect specific commands to handle_text to manage chat logic
+    # ✅ FIX: These commands will NOW only work in Private DMs
+    # This prevents your bot from stealing "/settings" from Shieldy in the group
+    telegram_app.add_handler(CommandHandler(
+        ["chat", "exit", "report", "cancel","rechat", "start", "help", "about", "preferences", "support", "reply", "broadcast", "premium", "settings"], 
+        handle_text, 
+        filters=filters.ChatType.PRIVATE
     ))
     
-    # E. MEDIA HANDLER (ALL CHATS)
-    # (The logic inside handle_media already separates Private vs Partner chats)
+    # General Text (Chatting)
+    telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    
+    # Media (Images, Video, Voice, Files) - Handles BOTH Payment Proofs & Chat Media
     telegram_app.add_handler(MessageHandler(
         filters.PHOTO | filters.VIDEO | filters.VOICE | filters.AUDIO | filters.VIDEO_NOTE | filters.Document.ALL | filters.Sticker.ALL, 
         handle_media
@@ -1627,9 +1638,17 @@ async def lifespan(app: FastAPI):
     await telegram_app.start()
     await telegram_app.updater.start_polling()
     
-    yield # Server runs here
+    yield # Server keeps running here
     
     # 6. Shutdown
     await telegram_app.updater.stop()
     await telegram_app.stop()
     await telegram_app.shutdown()
+
+# Create FastAPI App
+app = FastAPI(lifespan=lifespan)
+
+# Start Server
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8080))
+    uvicorn.run(app, host="0.0.0.0", port=port)
