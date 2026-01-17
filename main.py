@@ -30,12 +30,8 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 # ✅ Correct
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
-
-# ... (Under your existing ADMIN_ID load) ...
-
-# 🔴 NEW: FORCE SUBSCRIBE CONFIG
-FORCE_CHANNEL_ID = "@Ind_AnonChatCommunity"  # <--- REPLACE with your Channel Username
-FORCE_CHANNEL_LINK = "https://t.me/Ind_AnonChatCommunity" # <--- REPLACE with your Invite Link
+FORCE_CHANNEL_ID = "@Ind_AnonChatCommunity" # Replace with your channel
+FORCE_CHANNEL_LINK = "https://t.me/Ind_AnonChatCommunity"
 
 
 # --- LOGGING CONFIGURATION ---
@@ -189,10 +185,6 @@ async def send_welcome(context, user_id):
         reply_markup=main_menu,
         parse_mode=ParseMode.MARKDOWN
     )
-
-# --- 2. GLOBAL STATE ---
-user_states = {}
-active_sessions = {} 
 
 VIP_PLANS = {
     "pay_1m":  {"amt": 20000,  "days": 30,  "lbl": "1 Month"},
@@ -416,79 +408,55 @@ async def group_moderation(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- 6. CORE HANDLERS ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # 1. Ignore Groups (Security)
+    # 1. Ignore Groups
     if update.effective_chat.type != "private":
         return
 
     user = update.effective_user
     
-    # 🛑 GATEKEEPER: FORCE SUBSCRIBE CHECK 🛑
-    # We check this BEFORE accessing the database to save resources
+    # 🛑 FORCE SUBSCRIBE CHECK 🛑
     try:
-        # Check if user is a member of the channel
         member = await context.bot.get_chat_member(chat_id=FORCE_CHANNEL_ID, user_id=user.id)
-        
-        # Statuses that mean "Not Joined"
         if member.status in ['left', 'kicked']:
-            # Create the "Join" button
             kb = [
-                [InlineKeyboardButton("📢 Join Community Channel", url=FORCE_CHANNEL_LINK)],
+                [InlineKeyboardButton("📢 Join Channel", url=FORCE_CHANNEL_LINK)],
                 [InlineKeyboardButton("✅ I Have Joined", callback_data="check_subscription")]
             ]
             await update.message.reply_text(
-                "⚠️ **Access Denied**\n\n"
-                "To use this bot, you must join our official channel first.\n\n"
-                "1. Click **Join Community Channel**.\n"
-                "2. Join the channel.\n"
-                "3. Come back and click **I Have Joined**.",
+                "⚠️ **Access Denied**\n\nPlease join our channel to use this bot.",
                 reply_markup=InlineKeyboardMarkup(kb),
                 parse_mode=ParseMode.MARKDOWN
             )
-            return # ⛔ STOP HERE. Do not load the rest of the bot.
-            
-    except Exception as e:
-        # Fails safely if bot isn't admin in the channel yet
-        print(f"⚠️ Subscription Check Error: {e}")
+            return
+    except Exception:
+        pass # Ignore errors (e.g., bot not admin yet)
 
-    # --- EXISTING LOGIC RESUMES BELOW ---
-
+    # --- ORIGINAL LOGIC ---
     log(user.id, "START_BOT")
-    
-    # 2. Add user to Database (if new)
     await db.add_user(user.id, user.username, user.first_name)
     
-    # 3. Check Registration Status DIRECTLY from DB
     user_data = await db.get_user(user.id)
-    
-    # 🛑 GUARD: Check if data exists AND is complete
     is_registered = user_data and user_data.get('gender') and user_data.get('age') and user_data.get('country')
     
     if not is_registered:
-        # User is NEW or incomplete -> Force Registration immediately
         await check_registration(update, context, user.id)
         return 
 
-    # 4. If Registered, show the Welcome/Main Menu
     await send_welcome(context, user.id)
 
 async def handle_subscription_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
-    
     try:
-        # Check membership again
         member = await context.bot.get_chat_member(chat_id=FORCE_CHANNEL_ID, user_id=user_id)
-        
         if member.status in ['left', 'kicked']:
             await query.answer("❌ You haven't joined yet!", show_alert=True)
         else:
             await query.answer("✅ Verified!")
             await query.message.delete()
-            # Trigger the standard start flow
-            await start(update, context)
-            
+            await start(update, context) # Restart the flow
     except Exception as e:
-        await query.answer("⚠️ Error checking. Try /start again.")    
+        await query.answer("⚠️ Error checking. Try /start again.")
 
 async def handle_registration_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -737,6 +705,13 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {e}")
 
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # 🛑 IGNORE GROUPS
+    if update.effective_chat.type != "private":
+        return
+
+    user_id = update.effective_user.id
+    # ... (Rest of code) ...
 
 async def clear_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Removes the stuck menu buttons from the group."""
@@ -987,11 +962,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # 7. REGISTRATION ENFORCEMENT
     user_data = await db.get_user(user_id)
-
-    # ✅ FIXED LOGIC: Safe check
-    # This checks "Does user_data exist?" AND "Do they have details?" all in one line.
-    is_registered = user_data and user_data.get('gender') and user_data.get('age') and user_data.get('country')
-
+    is_registered = user_data.get('gender') and user_data.get('age') and user_data.get('country')
     if not is_registered:
         await check_registration(update, context, user_id)
         return
@@ -1626,7 +1597,7 @@ async def preferences_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     await update.message.reply_text(msg, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
 
-# --- 7. STARTUP & LIFESPAN (STRICT ORDER) ---
+# --- 7. STARTUP & LIFESPAN (Cleaned & Verified) ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # 1. Connect DB
@@ -1636,61 +1607,72 @@ async def lifespan(app: FastAPI):
     global telegram_app
     telegram_app = Application.builder().token(BOT_TOKEN).build()
     
-    # 3. Clear old webhooks
+    # 3. Clear old webhooks (Prevents conflicts)
     await telegram_app.bot.delete_webhook(drop_pending_updates=True)
     
-    # --- HANDLERS (ORDER IS CRITICAL) ---
+    # 4. Register Handlers (ORDER MATTERS)
     
-    # A. SPECIFIC COMMANDS (Start, Admin, Support)
-    # These MUST have their own functions. Do NOT put them in handle_text.
+    # --- Commands ---
     telegram_app.add_handler(CommandHandler("start", start))
     telegram_app.add_handler(CommandHandler("help", help_command))
     telegram_app.add_handler(CommandHandler("about", about_command))
     telegram_app.add_handler(CommandHandler("preferences", preferences_command))
     telegram_app.add_handler(CommandHandler("clear", clear_buttons))
     
-    # Admin & Support Tools
+    # --- Admin Ops ---
     telegram_app.add_handler(CommandHandler(["ban", "unban", "addvip", "removevip"], admin_op))
+
+    # Support & Admin Tools
     telegram_app.add_handler(CommandHandler("support", support_command))
     telegram_app.add_handler(CommandHandler("reply", reply_command))
     telegram_app.add_handler(CommandHandler("broadcast", broadcast_command))
+    
 
-    # B. DATING MENU BUTTONS (⚠️ PRIVATE CHAT ONLY)
-    # Only put "Text Buttons" or dating-specific commands here.
-    # REMOVED: start, help, settings, premium (they have their own logic now)
-    telegram_app.add_handler(CommandHandler(
-        ["chat", "exit", "rechat", "cancel"], 
-        handle_text, 
-        filters=filters.ChatType.PRIVATE 
+    # 2. General Text for Dating (PRIVATE ONLY)
+    telegram_app.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, 
+        handle_text
     ))
 
-    # C. CALLBACK QUERIES (Buttons)
-    # 👇 ADD THIS LINE 👇
-    telegram_app.add_handler(CallbackQueryHandler(handle_subscription_check, pattern="^check_subscription$"))
-    telegram_app.add_handler(CallbackQueryHandler(handle_registration_callbacks, pattern="^(reg_|reset_|close_)"))
-    telegram_app.add_handler(CallbackQueryHandler(handle_payment_selection, pattern="^(pay_|approve_|reject_)"))
-    telegram_app.add_handler(CallbackQueryHandler(handle_ban_appeal, pattern="^ban_appeal$"))
-    telegram_app.add_handler(CallbackQueryHandler(handle_rechat_accept, pattern="^accept_rechat_"))
-    telegram_app.add_handler(CallbackQueryHandler(handle_report_buttons, pattern="^(find_new_partner|report_|set_pref_)"))
-
-    # D. TEXT HANDLERS (SEPARATED)
-    
-    # 1. Group Moderation (⚠️ GROUPS ONLY)
-    # This ensures your "Warden" code runs ONLY in groups
+    # 3. Group Moderation (GROUPS ONLY)
+    # This runs the Security/Warden code we wrote earlier
     telegram_app.add_handler(MessageHandler(
         filters.TEXT & filters.ChatType.GROUPS, 
         group_moderation
     ))
 
-    # 2. Dating Logic (⚠️ PRIVATE CHAT ONLY)
-    # This ensures chatting/dating logic runs ONLY in DMs
-    telegram_app.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, 
-        handle_text
+    # --- Callbacks (Buttons) ---
+    # 👇 ADD THIS LINE
+    telegram_app.add_handler(CallbackQueryHandler(handle_subscription_check, pattern="^check_subscription$"))
+    # Registration: Gender, Country, Resets
+    telegram_app.add_handler(CallbackQueryHandler(handle_registration_callbacks, pattern="^(reg_|reset_|close_)"))
+    
+    # Payments: Pay, Approve, Reject
+    telegram_app.add_handler(CallbackQueryHandler(handle_payment_selection, pattern="^(pay_|approve_|reject_)"))
+    
+    # Ban Appeals
+    telegram_app.add_handler(CallbackQueryHandler(handle_ban_appeal, pattern="^ban_appeal$"))
+
+    # Re-Chat Accept Button
+    telegram_app.add_handler(CallbackQueryHandler(handle_rechat_accept, pattern="^accept_rechat_"))
+    
+    # Report & Matching Buttons
+    telegram_app.add_handler(CallbackQueryHandler(handle_report_buttons, pattern="^(find_new_partner|report_|set_pref_)"))
+
+    # --- Message Handlers (Text & Media) ---
+    # Redirect specific commands to handle_text to manage chat logic
+    # ✅ FIX: These commands will NOW only work in Private DMs
+    # This prevents your bot from stealing "/settings" from Shieldy in the group
+    telegram_app.add_handler(CommandHandler(
+        ["chat", "exit", "report", "cancel","rechat", "start", "help", "about", "preferences", "support", "reply", "broadcast", "premium", "settings"], 
+        handle_text, 
+        filters=filters.ChatType.PRIVATE
     ))
     
-    # E. MEDIA HANDLER (ALL CHATS)
-    # Logic inside handle_media already checks for private vs partner
+    # General Text (Chatting)
+    telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    
+    # Media (Images, Video, Voice, Files) - Handles BOTH Payment Proofs & Chat Media
     telegram_app.add_handler(MessageHandler(
         filters.PHOTO | filters.VIDEO | filters.VOICE | filters.AUDIO | filters.VIDEO_NOTE | filters.Document.ALL | filters.Sticker.ALL, 
         handle_media
@@ -1701,7 +1683,7 @@ async def lifespan(app: FastAPI):
     await telegram_app.start()
     await telegram_app.updater.start_polling()
     
-    yield # Server runs here
+    yield # Server keeps running here
     
     # 6. Shutdown
     await telegram_app.updater.stop()
@@ -1715,4 +1697,3 @@ app = FastAPI(lifespan=lifespan)
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run(app, host="0.0.0.0", port=port)
-
