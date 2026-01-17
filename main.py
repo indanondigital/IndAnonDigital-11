@@ -925,7 +925,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # 7. REGISTRATION ENFORCEMENT
     user_data = await db.get_user(user_id)
-    is_registered = user_data.get('gender') and user_data.get('age') and user_data.get('country')
+
+    # ✅ FIXED LOGIC: Safe check
+    # This checks "Does user_data exist?" AND "Do they have details?" all in one line.
+    is_registered = user_data and user_data.get('gender') and user_data.get('age') and user_data.get('country')
+
     if not is_registered:
         await check_registration(update, context, user_id)
         return
