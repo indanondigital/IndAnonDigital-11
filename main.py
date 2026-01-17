@@ -5,6 +5,7 @@ import uvicorn
 import hmac
 import hashlib
 import json
+import logging
 import datetime
 import re
 import string
@@ -32,6 +33,14 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
 FORCE_CHANNEL_ID = "@Ind_AnonChatCommunity" # Replace with your channel
 FORCE_CHANNEL_LINK = "https://t.me/Ind_AnonChatCommunity"
+
+# --- 2. LOGGING SETUP (NEW) ---
+# This configures the logs to show Time, Level, and Message
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
 
 # --- LOGGING CONFIGURATION ---
@@ -185,6 +194,7 @@ async def send_welcome(context, user_id):
         reply_markup=main_menu,
         parse_mode=ParseMode.MARKDOWN
     )
+    logger.info(f"User {user_id} is now registerd.")
 
 VIP_PLANS = {
     "pay_1m":  {"amt": 20000,  "days": 30,  "lbl": "1 Month"},
@@ -424,8 +434,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # --- DEBUG CHECK 2: Gatekeeper ---
         try:
             # Replace with your specific channel ID variable
-            FORCE_CHANNEL_ID = "@IndAnonUpdates" 
-            FORCE_CHANNEL_LINK = "https://t.me/IndAnonUpdates"
+            FORCE_CHANNEL_ID = "@Ind_AnonChatCommunity" 
+            FORCE_CHANNEL_LINK = "https://t.me/Ind_AnonChatCommunity"
             
             member = await context.bot.get_chat_member(chat_id=FORCE_CHANNEL_ID, user_id=user.id)
             if member.status in ['left', 'kicked']:
