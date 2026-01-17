@@ -31,6 +31,12 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 # ✅ Correct
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
+# ... (Under your existing ADMIN_ID load) ...
+
+# 🔴 NEW: FORCE SUBSCRIBE CONFIG
+FORCE_CHANNEL_ID = "@Ind_AnonChatCommunity"  # <--- REPLACE with your Channel Username
+FORCE_CHANNEL_LINK = "https://t.me/Ind_AnonChatCommunity" # <--- REPLACE with your Invite Link
+
 
 # --- LOGGING CONFIGURATION ---
 try:
@@ -415,8 +421,37 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     user = update.effective_user
-    chat_id = update.effective_chat.id
     
+    # 🛑 GATEKEEPER: FORCE SUBSCRIBE CHECK 🛑
+    # We check this BEFORE accessing the database to save resources
+    try:
+        # Check if user is a member of the channel
+        member = await context.bot.get_chat_member(chat_id=FORCE_CHANNEL_ID, user_id=user.id)
+        
+        # Statuses that mean "Not Joined"
+        if member.status in ['left', 'kicked']:
+            # Create the "Join" button
+            kb = [
+                [InlineKeyboardButton("📢 Join Community Channel", url=FORCE_CHANNEL_LINK)],
+                [InlineKeyboardButton("✅ I Have Joined", callback_data="check_subscription")]
+            ]
+            await update.message.reply_text(
+                "⚠️ **Access Denied**\n\n"
+                "To use this bot, you must join our official channel first.\n\n"
+                "1. Click **Join Community Channel**.\n"
+                "2. Join the channel.\n"
+                "3. Come back and click **I Have Joined**.",
+                reply_markup=InlineKeyboardMarkup(kb),
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return # ⛔ STOP HERE. Do not load the rest of the bot.
+            
+    except Exception as e:
+        # Fails safely if bot isn't admin in the channel yet
+        print(f"⚠️ Subscription Check Error: {e}")
+
+    # --- EXISTING LOGIC RESUMES BELOW ---
+
     log(user.id, "START_BOT")
     
     # 2. Add user to Database (if new)
@@ -426,16 +461,34 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_data = await db.get_user(user.id)
     
     # 🛑 GUARD: Check if data exists AND is complete
-    # This prevents the "NoneType" crash you saw earlier
     is_registered = user_data and user_data.get('gender') and user_data.get('age') and user_data.get('country')
     
     if not is_registered:
         # User is NEW or incomplete -> Force Registration immediately
         await check_registration(update, context, user.id)
-        return  # STOP HERE! Do not show the main menu.
+        return 
 
     # 4. If Registered, show the Welcome/Main Menu
-    await send_welcome(context, user.id)    
+    await send_welcome(context, user.id)
+
+async def handle_subscription_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user_id = query.from_user.id
+    
+    try:
+        # Check membership again
+        member = await context.bot.get_chat_member(chat_id=FORCE_CHANNEL_ID, user_id=user_id)
+        
+        if member.status in ['left', 'kicked']:
+            await query.answer("❌ You haven't joined yet!", show_alert=True)
+        else:
+            await query.answer("✅ Verified!")
+            await query.message.delete()
+            # Trigger the standard start flow
+            await start(update, context)
+            
+    except Exception as e:
+        await query.answer("⚠️ Error checking. Try /start again.")    
 
 async def handle_registration_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1612,6 +1665,8 @@ async def lifespan(app: FastAPI):
     ))
 
     # C. CALLBACK QUERIES (Buttons)
+    # 👇 ADD THIS LINE 👇
+    telegram_app.add_handler(CallbackQueryHandler(handle_subscription_check, pattern="^check_subscription$"))
     telegram_app.add_handler(CallbackQueryHandler(handle_registration_callbacks, pattern="^(reg_|reset_|close_)"))
     telegram_app.add_handler(CallbackQueryHandler(handle_payment_selection, pattern="^(pay_|approve_|reject_)"))
     telegram_app.add_handler(CallbackQueryHandler(handle_ban_appeal, pattern="^ban_appeal$"))
@@ -1661,4 +1716,3 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run(app, host="0.0.0.0", port=port)
 
-    
