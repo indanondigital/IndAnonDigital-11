@@ -745,11 +745,72 @@ async def clear_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await msg.delete()
     await update.message.delete()
 
+async def validate_access(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    🔒 UNIVERSAL LOCK: Checks Channel & Registration before allowing ANY action.
+    Returns: True (Allowed) or False (Blocked).
+    """
+    user = update.effective_user
+    
+    # --- 1. GATEKEEPER (Channel Check) ---
+    try:
+        # Check if user is still in the channel
+        member = await context.bot.get_chat_member(chat_id=FORCE_CHANNEL_ID, user_id=user.id)
+        
+        # If they LEFT or were KICKED -> BLOCK THEM
+        if member.status in ['left', 'kicked']:
+            kb = [
+                [InlineKeyboardButton("📢 Join Community", url=FORCE_CHANNEL_LINK)],
+                [InlineKeyboardButton("✅ I Have Joined", callback_data="check_subscription")]
+            ]
+            
+            # Send the "Locked" message
+            msg_text = "⛔ **Access Locked**\n\nYou left our community channel.\nYou must **Join Back** to use this bot."
+            
+            if update.callback_query:
+                await update.callback_query.answer("⛔ Access Denied! Join Channel.", show_alert=True)
+                # Optionally resend the lock message if needed
+                try: await update.callback_query.message.edit_text(msg_text, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
+                except: pass
+            elif update.message:
+                await update.message.reply_text(msg_text, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
+                
+            return False # 🚫 STOP EVERYTHING
+            
+    except Exception as e:
+        print(f"⚠️ Lockup Check Error: {e}")
+        # If the bot isn't admin, we usually allow access to prevent crashes, 
+        # but for STRICT lockup, you might want to return False here too.
+        pass 
+
+    # --- 2. REGISTRATION CHECK ---
+    user_data = await db.get_user(user.id)
+    
+    # If user not in DB at all
+    if not user_data:
+        await db.add_user(user.id, user.username, user.first_name)
+        await check_registration(update, context, user.id)
+        return False
+
+    # If user exists but profile is empty
+    is_registered = user_data.get('gender') and user_data.get('age') and user_data.get('country')
+    if not is_registered:
+        if update.callback_query:
+            await update.callback_query.answer("⚠️ Finish Registration First!", show_alert=True)
+        await check_registration(update, context, user.id)
+        return False # 🚫 STOP EVERYTHING
+
+    return True # ✅ ALLOWED
+
 # --- MASTER TEXT HANDLER ---
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 🛑 1. SECURITY: IGNORE GROUPS
     # This prevents the bot from sending menus or dating commands in public groups
     if update.effective_chat.type != "private":
+        return
+    
+    # 🔒 ADD THIS BLOCK AT THE VERY TOP 🔒
+    if not await validate_access(update, context):
         return
 
     user_id = update.effective_user.id
@@ -1180,6 +1241,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # 🔒 ADD THIS BLOCK AT THE VERY TOP 🔒
+    if not await validate_access(update, context):
+        return
+    
     user_id = update.effective_user.id
     
     # 1. Ban Check (Preserved)
@@ -1334,6 +1399,10 @@ async def handle_rechat_accept(update: Update, context: ContextTypes.DEFAULT_TYP
 # --- 6. PAYMENTS (SAFE & LOGGED) ---
 # --- 6. PAYMENTS (STACKING LOGIC) ---
 async def handle_payment_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # 🔒 ADD THIS 🔒
+    if not await validate_access(update, context):
+        return
+    
     query = update.callback_query
     user_id = query.from_user.id
     data = query.data
@@ -1528,6 +1597,10 @@ async def admin_op(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ System Error: {e}")
 
 async def handle_report_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # 🔒 ADD THIS 🔒
+    if not await validate_access(update, context):
+        return
+    
     query = update.callback_query
     user_id = query.from_user.id
     await query.answer() 
