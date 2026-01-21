@@ -1423,7 +1423,6 @@ async def handle_payment_selection(update: Update, context: ContextTypes.DEFAULT
     YOUR_UPI_ID = "indanondigital@upi" 
     YOUR_NAME = "Sachin Ramesh Paswan"
 
-    # Wrap in Try/Except to catch ANY crash and tell you why
     try:
         # --- 1. ADMIN CLICKED "APPROVE" ---
         if data.startswith("approve_"):
@@ -1445,8 +1444,8 @@ async def handle_payment_selection(update: Update, context: ContextTypes.DEFAULT
             await db.make_premium(target_id, days=total_days)
 
             await query.edit_message_caption(
-                caption=f"✅ <b>APPROVED!</b>\nUser {target_id} given {days_to_add} days.\n(Total VIP: {total_days} days)", 
-                parse_mode=ParseMode.HTML
+                caption=f"✅ *APPROVED!*\nUser {target_id} given {days_to_add} days.\n(Total VIP: {total_days} days)", 
+                parse_mode=ParseMode.MARKDOWN
             )
 
             # Shadow Log
@@ -1462,8 +1461,8 @@ async def handle_payment_selection(update: Update, context: ContextTypes.DEFAULT
             try:
                 await context.bot.send_message(
                     target_id, 
-                    f"🎉 <b>Payment Verified!</b>\n\nYou are now a VIP Member for <b>{total_days} Days</b>!{msg_extra}\nStart chatting with /chat.",
-                    parse_mode=ParseMode.HTML
+                    f"🎉 *Payment Verified!*\n\nYou are now a VIP Member for *{total_days} Days*!{msg_extra}\nStart chatting with /chat.",
+                    parse_mode=ParseMode.MARKDOWN
                 )
             except:
                 pass 
@@ -1472,15 +1471,15 @@ async def handle_payment_selection(update: Update, context: ContextTypes.DEFAULT
         # --- 2. ADMIN CLICKED "REJECT" ---
         if data.startswith("reject_"):
             target_id = int(data.split("_")[1])
-            await query.edit_message_caption(caption=f"❌ <b>REJECTED.</b>\nUser {target_id} was denied.", parse_mode=ParseMode.HTML)
+            await query.edit_message_caption(caption=f"❌ *REJECTED.*\nUser {target_id} was denied.", parse_mode=ParseMode.MARKDOWN)
             log(target_id, "PAYMENT_REJECTED", admin=user_id)
             try:
-                await context.bot.send_message(target_id, "❌ <b>Payment Rejected.</b>\nYour screenshot was not accepted. Please contact the Admin.", parse_mode=ParseMode.HTML)
+                await context.bot.send_message(target_id, "❌ *Payment Rejected.*\nYour screenshot was not accepted. Please contact the Admin.", parse_mode=ParseMode.MARKDOWN)
             except:
                 pass
             return
 
-        # --- 3. USER SELECTS PLAN (SEND QR) ---
+        # --- 3. USER SELECTS PLAN ---
         plan = VIP_PLANS.get(data)
         if plan:
             log(user_id, "INITIATE_PAYMENT", plan=data)
@@ -1489,41 +1488,39 @@ async def handle_payment_selection(update: Update, context: ContextTypes.DEFAULT
             # Deep Link
             pay_link = f"upi://pay?pa={YOUR_UPI_ID}&pn={YOUR_NAME}&am={amount_in_rupees}&cu=INR"
 
-            # ✅ HTML CAPTION with CLICKABLE LINK
-            # <b> = Bold
-            # <code> = Copyable
-            # <a href="..."> = Clickable Link (Replacing the broken button)
+            # ✅ SAFE CAPTION (Markdown)
+            # We put the link in the TEXT because Buttons don't support UPI
             caption = (
-                f"💎 <b>Upgrade to VIP: {plan['lbl']}</b>\n"
+                f"💎 *Upgrade to VIP: {plan['lbl']}*\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
-                f"💰 <b>Pay Amount: ₹{amount_in_rupees}</b>\n\n"
-                f"👇 <b>Tap to Copy UPI ID:</b>\n"
-                f"<code>{YOUR_UPI_ID}</code>\n\n"
-                f"🚀 <a href='{pay_link}'><b>Click here to Pay via UPI App</b></a>\n\n"
-                f"📸 <b>Or Scan the QR Code above.</b>\n\n"
-                f"✅ <b>After Paying:</b>\n"
+                f"💰 *Pay Amount: ₹{amount_in_rupees}*\n\n"
+                f"👇 *Tap to Copy UPI ID:*\n"
+                f"`{YOUR_UPI_ID}`\n\n"
+                f"🔗 [Click to Pay via UPI App]({pay_link})\n\n" 
+                f"📸 *Or Scan the QR Code above.*\n\n"
+                f"✅ *After Paying:*\n"
                 f"Send the screenshot here for verification."
             )
 
             # Check if file exists
             if not os.path.exists("qrcode.jpg"):
-                await query.message.reply_text("⚠️ <b>System Error:</b> `qrcode.jpg` is missing on server.", parse_mode=ParseMode.HTML)
+                await query.message.reply_text("⚠️ *System Error:* `qrcode.jpg` is missing on server.", parse_mode=ParseMode.MARKDOWN)
                 return
 
-            # Send Photo with HTML Caption
+            # Send Photo (Without the crashing button)
             await query.message.reply_photo(
                 photo=open("qrcode.jpg", "rb"),
                 caption=caption,
-                parse_mode=ParseMode.HTML 
+                parse_mode=ParseMode.MARKDOWN 
             )
             user_states[user_id] = f"WAITING_PAYMENT_{plan['days']}"
             await query.answer()
 
     except Exception as e:
-        # 🚨 CATCH-ALL: Prints exact error to chat if it fails
+        # 🚨 DEBUGGER: If it fails, this message will tell you WHY.
         print(f"❌ Payment Error: {e}")
         try:
-            await query.message.reply_text(f"❌ <b>Bot Error:</b> {str(e)}", parse_mode=ParseMode.HTML)
+            await query.message.reply_text(f"❌ *Bot Error:* `{str(e)}`", parse_mode=ParseMode.MARKDOWN)
         except:
             pass
 
