@@ -1146,8 +1146,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         label = "Random User" if target == 'any' else target.capitalize()
         
         await update.message.reply_text(f"🔍 **Searching for: {label}...**", reply_markup=stop_menu, parse_mode=ParseMode.MARKDOWN)
+
         await db.add_to_queue(user_id, target)
         match_id = await db.find_match(user_id, target)
+
         if match_id: await send_match_messages(context, user_id, match_id)
         return
 
@@ -1409,7 +1411,7 @@ async def handle_rechat_accept(update: Update, context: ContextTypes.DEFAULT_TYP
 # --- 6. PAYMENTS (SAFE & LOGGED) ---
 # --- 6. PAYMENTS (STACKING LOGIC) ---
 async def handle_payment_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # 🔒 ADD THIS 🔒
+    # 🔒 LOCK: Security Check
     if not await validate_access(update, context):
         return
     
@@ -1417,126 +1419,113 @@ async def handle_payment_selection(update: Update, context: ContextTypes.DEFAULT
     user_id = query.from_user.id
     data = query.data
 
-    # --- CONFIGURATION: YOUR UPI DETAILS ---
-    # 🔴 REPLACE THESE TWO LINES WITH YOUR REAL DETAILS
+    # --- CONFIGURATION ---
     YOUR_UPI_ID = "indanondigital@upi" 
     YOUR_NAME = "Sachin Ramesh Paswan"
 
-    # --- 1. ADMIN CLICKED "APPROVE" (With Stacking & Logging) ---
-    if data.startswith("approve_"):
-        # Format: approve_USERID_DAYS
-        parts = data.split("_")
-        target_id = int(parts[1])
-        days_to_add = int(parts[2])
-        
-        # --- 🧠 STACKING LOGIC (Preserved) ---
-        user_data = await db.get_user(target_id)
-        current_expiry = user_data.get('vip_expiry')
-        
-        total_days = days_to_add
-        msg_extra = ""
-
-        # Check if they already have active VIP
-        if current_expiry and isinstance(current_expiry, datetime.datetime) and current_expiry > datetime.datetime.now():
-            # Calculate remaining days
-            delta = current_expiry - datetime.datetime.now()
-            remaining_days = delta.days + 1 # +1 Buffer
+    # Wrap in Try/Except to catch ANY crash and tell you why
+    try:
+        # --- 1. ADMIN CLICKED "APPROVE" ---
+        if data.startswith("approve_"):
+            parts = data.split("_")
+            target_id = int(parts[1])
+            days_to_add = int(parts[2])
             
-            # Stack them: Existing + New
-            total_days = remaining_days + days_to_add
-            msg_extra = f"\n(Added to existing {remaining_days} days)"
-        # ----------------------------------------------------
+            user_data = await db.get_user(target_id)
+            current_expiry = user_data.get('vip_expiry')
+            total_days = days_to_add
+            msg_extra = ""
 
-        # Update DB with the TOTAL summed days
-        await db.make_premium(target_id, days=total_days)
+            if current_expiry and isinstance(current_expiry, datetime.datetime) and current_expiry > datetime.datetime.now():
+                delta = current_expiry - datetime.datetime.now()
+                remaining_days = delta.days + 1 
+                total_days = remaining_days + days_to_add
+                msg_extra = f"\n(Added to existing {remaining_days} days)"
 
-        # Update Admin's Message to show success
-        await query.edit_message_caption(caption=f"✅ *APPROVED!*\nUser {target_id} given {days_to_add} days.\n(Total VIP: {total_days} days)")
+            await db.make_premium(target_id, days=total_days)
 
-        # --- 🔒 SHADOW LOG (Preserved) ---
-        estimated_amount = "Unknown"
-        for p in VIP_PLANS.values():
-            if p['days'] == days_to_add:
-                estimated_amount = p['amt'] // 100
-                break
-
-        await log_payment_event(
-            context=context,
-            user_id=target_id,
-            amount=estimated_amount,
-            status="MANUAL_APPROVED",
-            payload=f"Admin: {user_id}"
-        )
-        
-        # General Log
-        log(target_id, "PAYMENT_SUCCESS_MANUAL", added=days_to_add, total=total_days, admin=user_id)
-
-        # Notify User
-        try:
-            await context.bot.send_message(
-                target_id, 
-                f"🎉 *Payment Verified!*\n\nYou are now a VIP Member for *{total_days} Days*!{msg_extra}\nStart chatting with /chat.",
-                parse_mode=ParseMode.MARKDOWN
+            await query.edit_message_caption(
+                caption=f"✅ <b>APPROVED!</b>\nUser {target_id} given {days_to_add} days.\n(Total VIP: {total_days} days)", 
+                parse_mode=ParseMode.HTML
             )
-        except:
-            pass # User blocked bot
-        return
 
-    # --- 2. ADMIN CLICKED "REJECT" ---
-    if data.startswith("reject_"):
-        target_id = int(data.split("_")[1])
-        await query.edit_message_caption(caption=f"❌ *REJECTED.*\nUser {target_id} was denied.")
-        
-        # Log the rejection
-        log(target_id, "PAYMENT_REJECTED", admin=user_id)
-        
-        try:
-            await context.bot.send_message(target_id, "❌ *Payment Rejected.*\nYour screenshot was not accepted. Please contact the Admin.", parse_mode=ParseMode.MARKDOWN)
-        except:
-            pass
-        return
+            # Shadow Log
+            estimated_amount = "Unknown"
+            for p in VIP_PLANS.values():
+                if p['days'] == days_to_add:
+                    estimated_amount = p['amt'] // 100
+                    break
 
-    # --- 3. USER SELECTS PLAN (UPDATED WITH UPI FEATURES) ---
-    plan = VIP_PLANS.get(data)
-    if plan:
-        # Log that they clicked the button
-        log(user_id, "INITIATE_PAYMENT", plan=data)
+            await log_payment_event(context, target_id, estimated_amount, "MANUAL_APPROVED", f"Admin: {user_id}")
+            log(target_id, "PAYMENT_SUCCESS_MANUAL", added=days_to_add, total=total_days, admin=user_id)
 
-        amount_in_rupees = plan['amt'] // 100 
-        
-        # 🔥 Feature 1: Generate Deep Link for One-Click Payment
-        pay_link = f"upi://pay?pa={YOUR_UPI_ID}&pn={YOUR_NAME}&am={amount_in_rupees}&cu=INR"
+            try:
+                await context.bot.send_message(
+                    target_id, 
+                    f"🎉 <b>Payment Verified!</b>\n\nYou are now a VIP Member for <b>{total_days} Days</b>!{msg_extra}\nStart chatting with /chat.",
+                    parse_mode=ParseMode.HTML
+                )
+            except:
+                pass 
+            return
 
-        # 🔥 Feature 2: Copyable UPI ID in Caption
-        caption = (
-            f"💎 *Upgrade to VIP: {plan['lbl']}*\n"
-            f"━━━━━━━━━━━━━━━━━━\n"
-            f"💰 *Pay Amount: ₹{amount_in_rupees}*\n\n"
-            f"👇 *Tap to Copy UPI ID:*\n"
-            f"`{YOUR_UPI_ID}`\n\n"
-            f"📸 *Or Scan the QR Code above.*\n\n"
-            f"✅ *After Paying:*\n"
-            f"Send the screenshot here for verification."
-            f"━━━━━━━━━━━━━━━━━━\n"
-        )
+        # --- 2. ADMIN CLICKED "REJECT" ---
+        if data.startswith("reject_"):
+            target_id = int(data.split("_")[1])
+            await query.edit_message_caption(caption=f"❌ <b>REJECTED.</b>\nUser {target_id} was denied.", parse_mode=ParseMode.HTML)
+            log(target_id, "PAYMENT_REJECTED", admin=user_id)
+            try:
+                await context.bot.send_message(target_id, "❌ <b>Payment Rejected.</b>\nYour screenshot was not accepted. Please contact the Admin.", parse_mode=ParseMode.HTML)
+            except:
+                pass
+            return
 
-        # Create the Button
-        kb = [[InlineKeyboardButton("🚀 Pay via UPI App", url=pay_link)]]
+        # --- 3. USER SELECTS PLAN (SEND QR) ---
+        plan = VIP_PLANS.get(data)
+        if plan:
+            log(user_id, "INITIATE_PAYMENT", plan=data)
+            amount_in_rupees = plan['amt'] // 100 
+            
+            # Deep Link
+            pay_link = f"upi://pay?pa={YOUR_UPI_ID}&pn={YOUR_NAME}&am={amount_in_rupees}&cu=INR"
 
-        try:
-            # Sends the qrcode.jpg from your folder
+            # ✅ HTML CAPTION with CLICKABLE LINK
+            # <b> = Bold
+            # <code> = Copyable
+            # <a href="..."> = Clickable Link (Replacing the broken button)
+            caption = (
+                f"💎 <b>Upgrade to VIP: {plan['lbl']}</b>\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"💰 <b>Pay Amount: ₹{amount_in_rupees}</b>\n\n"
+                f"👇 <b>Tap to Copy UPI ID:</b>\n"
+                f"<code>{YOUR_UPI_ID}</code>\n\n"
+                f"🚀 <a href='{pay_link}'><b>Click here to Pay via UPI App</b></a>\n\n"
+                f"📸 <b>Or Scan the QR Code above.</b>\n\n"
+                f"✅ <b>After Paying:</b>\n"
+                f"Send the screenshot here for verification."
+            )
+
+            # Check if file exists
+            if not os.path.exists("qrcode.jpg"):
+                await query.message.reply_text("⚠️ <b>System Error:</b> `qrcode.jpg` is missing on server.", parse_mode=ParseMode.HTML)
+                return
+
+            # Send Photo with HTML Caption
             await query.message.reply_photo(
                 photo=open("qrcode.jpg", "rb"),
                 caption=caption,
-                parse_mode=ParseMode.MARKDOWN,
-                reply_markup=InlineKeyboardMarkup(kb) # <--- Added the Button here
+                parse_mode=ParseMode.HTML 
             )
-            # Save state so we know they are paying
             user_states[user_id] = f"WAITING_PAYMENT_{plan['days']}"
-        except FileNotFoundError:
-            await query.message.reply_text("⚠️ Error: `qrcode.jpg` not found. Please contact Admin.")
-        
-        await query.answer()  
+            await query.answer()
+
+    except Exception as e:
+        # 🚨 CATCH-ALL: Prints exact error to chat if it fails
+        print(f"❌ Payment Error: {e}")
+        try:
+            await query.message.reply_text(f"❌ <b>Bot Error:</b> {str(e)}", parse_mode=ParseMode.HTML)
+        except:
+            pass
 
 # --- ADMIN COMMANDS ---
 async def admin_op(update: Update, context: ContextTypes.DEFAULT_TYPE):
